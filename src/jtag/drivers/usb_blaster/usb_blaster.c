@@ -83,6 +83,11 @@
 #include <sys/time.h>
 #include <time.h>
 
+#define CLOCK_DIV	16
+
+#define repeat_for_clock_div(clock_div) \
+	for (int i = 0; i < clock_div; i++)
+
 /* Size of USB endpoint max packet size, ie. 64 bytes */
 #define MAX_PACKET_SIZE 64
 /*
@@ -333,6 +338,21 @@ static void ublast_reset(int trst, int srst)
  *
  * Triggers a TMS transition (ie. one JTAG TAP state move).
  */
+
+/**
+ *    ublast_queue_byte(out);
+ *    ublast_queue_byte(out | TCK);
+ *    ------------------------------
+ *    = 25MHz
+ *
+ *    ublast_queue_byte(out);
+ *    ublast_queue_byte(out);
+ *    ublast_queue_byte(out | TCK);
+ *    ublast_queue_byte(out | TCK);
+ *    ------------------------------
+ *    = 12.5MHz
+ *
+ */
 static void ublast_clock_tms(int tms)
 {
 	uint8_t out;
@@ -341,8 +361,10 @@ static void ublast_clock_tms(int tms)
 	info.tms = !!tms;
 	info.tdi = 0;
 	out = ublast_build_out(SCAN_OUT);
-	ublast_queue_byte(out);
-	ublast_queue_byte(out | TCK);
+	repeat_for_clock_div(CLOCK_DIV)
+		ublast_queue_byte(out);
+	repeat_for_clock_div(CLOCK_DIV)
+		ublast_queue_byte(out | TCK);
 }
 
 /**
@@ -379,10 +401,15 @@ static void ublast_clock_tdi(int tdi, enum scan_type type)
 	info.tdi = !!tdi;
 
 	out = ublast_build_out(SCAN_OUT);
-	ublast_queue_byte(out);
+	repeat_for_clock_div(CLOCK_DIV)
+		ublast_queue_byte(out);
 
 	out = ublast_build_out(type);
 	ublast_queue_byte(out | TCK);
+
+	out = ublast_build_out(SCAN_OUT);
+	repeat_for_clock_div(CLOCK_DIV)
+		ublast_queue_byte(out | TCK);
 }
 
 /**
@@ -405,13 +432,15 @@ static void ublast_clock_tdi_flip_tms(int tdi, enum scan_type type)
 	info.tms = !info.tms;
 
 	out = ublast_build_out(SCAN_OUT);
-	ublast_queue_byte(out);
+	repeat_for_clock_div(CLOCK_DIV)
+		ublast_queue_byte(out);
 
 	out = ublast_build_out(type);
 	ublast_queue_byte(out | TCK);
 
 	out = ublast_build_out(SCAN_OUT);
-	ublast_queue_byte(out);
+	repeat_for_clock_div(CLOCK_DIV)
+		ublast_queue_byte(out);
 }
 
 /**
@@ -566,10 +595,9 @@ static int ublast_read_byteshifted_tdos(uint8_t *buf, int nb_bytes)
  */
 static int ublast_read_bitbang_tdos(uint8_t *buf, int nb_bits)
 {
-	int nb1 = nb_bits;
-	int i, ret = ERROR_OK;
+	int i, j = 0, ret = ERROR_OK;
 	unsigned int retlen;
-	uint8_t tmp[8];
+	uint8_t *tmp = malloc(nb_bits);
 
 	DEBUG_JTAG_IO("%s(buf=%p, num_bits=%d)", __func__, buf, nb_bits);
 
@@ -579,12 +607,21 @@ static int ublast_read_bitbang_tdos(uint8_t *buf, int nb_bits)
 	 */
 	ublast_flush_buffer();
 
-	ret = ublast_buf_read(tmp, nb1, &retlen);
-	for (i = 0; ret == ERROR_OK && i < nb1; i++)
+	ret = ublast_buf_read(tmp, nb_bits, &retlen);
+	for (i = 0; ret == ERROR_OK && i < nb_bits; i++) {
 		if (tmp[i] & READ_TDO)
-			*buf |= (1 << i);
+			*buf |= (1 << (i % 8));
 		else
-			*buf &= ~(1 << i);
+			*buf &= ~(1 << (i % 8));
+		j++;
+		if (j == 8) {
+			buf++;
+			j = 0;
+		}
+	}
+
+	free(tmp);
+
 	return ret;
 }
 
@@ -611,7 +648,7 @@ static void ublast_queue_tdi(uint8_t *bits, int nb_bits, enum scan_type scan)
 {
 	int nb8 = nb_bits / 8;
 	int nb1 = nb_bits % 8;
-	int nbfree_in_packet, i, trans = 0, read_tdos;
+	int nbfree_in_packet, i, j, k, trans = 0, read_tdos;
 	uint8_t *tdos = calloc(1, nb_bits / 8 + 1);
 	static uint8_t byte0[BUF_LEN];
 
@@ -643,18 +680,34 @@ static void ublast_queue_tdi(uint8_t *bits, int nb_bits, enum scan_type scan)
 		 *  - current filling level of write buffer
 		 *  - remaining bytes to write in byte-shift mode
 		 */
-		if (read_tdos)
-			ublast_queue_byte(SHMODE | READ | trans);
-		else
-			ublast_queue_byte(SHMODE | trans);
-		if (bits)
-			ublast_queue_bytes(&bits[i], trans);
-		else
-			ublast_queue_bytes(byte0, trans);
-		if (read_tdos) {
-			if (info.flags & COPY_TDO_BUFFER)
-				ublast_queue_byte(CMD_COPY_TDO_BUFFER);
-			ublast_read_byteshifted_tdos(&tdos[i], trans);
+		if (CLOCK_DIV == 1) {
+			if (read_tdos)
+				ublast_queue_byte(SHMODE | READ | trans);
+			else
+				ublast_queue_byte(SHMODE | trans);
+			if (bits)
+				ublast_queue_bytes(&bits[i], trans);
+			else
+				ublast_queue_bytes(byte0, trans);
+			if (read_tdos) {
+				if (info.flags & COPY_TDO_BUFFER)
+					ublast_queue_byte(CMD_COPY_TDO_BUFFER);
+				ublast_read_byteshifted_tdos(&tdos[i], trans);
+			}
+		} else {
+			for (j = 0; j < trans; j++) {
+				for (k = 0; k < 8; k++) {
+					int tdi = bits ? bits[j + i] & (1 << k) : 0;
+					ublast_clock_tdi(tdi, scan);
+				}
+			}
+
+			if (read_tdos) {
+				if (info.flags & COPY_TDO_BUFFER)
+					ublast_queue_byte(CMD_COPY_TDO_BUFFER);
+				ublast_read_bitbang_tdos(&tdos[i], trans * 8);
+			} else
+				ublast_flush_buffer();
 		}
 	}
 
@@ -672,7 +725,8 @@ static void ublast_queue_tdi(uint8_t *bits, int nb_bits, enum scan_type scan)
 		if (info.flags & COPY_TDO_BUFFER)
 			ublast_queue_byte(CMD_COPY_TDO_BUFFER);
 		ublast_read_bitbang_tdos(&tdos[nb8], nb1);
-	}
+	} else
+		ublast_flush_buffer();
 
 	if (bits)
 		memcpy(bits, tdos, DIV_ROUND_UP(nb_bits, 8));

@@ -242,6 +242,7 @@ static struct ublast_lowlevel low = {
 	.read = ublast2_libusb_read,
 	.write = ublast2_libusb_write,
 	.flags = COPY_TDO_BUFFER,
+	.clock_frequency = 25000000,
 };
 
 struct ublast_lowlevel *ublast2_register_libusb(void)
