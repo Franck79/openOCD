@@ -304,6 +304,10 @@ int target_unregister_event_callback(
 		enum target_event event, void *priv),
 		void *priv);
 
+int target_unregister_timer_callback(
+		int (*callback)(void *priv),
+		void *priv);
+
 /* Poll the status of the target, detect any error conditions and report them.
  *
  * Also note that this fn will clear such error conditions, so a subsequent
