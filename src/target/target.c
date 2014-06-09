@@ -47,6 +47,7 @@
 #include <jtag/jtag.h>
 #include <flash/nor/core.h>
 #include <helper/show_progress.h>
+#include <helper/display_options.h>
 
 #include "target.h"
 #include "target_type.h"
@@ -3042,8 +3043,9 @@ COMMAND_HANDLER(handle_load_image_command)
 				break;
 			}
 			image_size += length;
-			command_print(CMD_CTX, "%u bytes written at address 0x%8.8" PRIx32 "",
+			command_print(CMD_CTX, "%u bytes (%s) written at address 0x%8.8" PRIx32 "",
 					(unsigned int)length,
+					size_human_readable(length),
 					image.sections[i].base_address + offset);
 		}
 
@@ -3051,8 +3053,8 @@ COMMAND_HANDLER(handle_load_image_command)
 	}
 
 	if ((ERROR_OK == retval) && (duration_measure(&bench) == ERROR_OK)) {
-		command_print(CMD_CTX, "downloaded %" PRIu32 " bytes "
-				"in %fs (%0.3f KiB/s)", image_size,
+		command_print(CMD_CTX, "downloaded %" PRIu32 " bytes (%s)"
+				"in %fs (%0.3f KiB/s)", image_size, size_human_readable(image_size),
 				duration_elapsed(&bench), duration_kbps(&bench, image_size));
 	}
 
@@ -3113,7 +3115,8 @@ COMMAND_HANDLER(handle_dump_image_command)
 		if (retval != ERROR_OK)
 			return retval;
 		command_print(CMD_CTX,
-				"dumped %ld bytes in %fs (%0.3f KiB/s)", (long)filesize,
+				"dumped %ld bytes (%s) in %fs (%0.3f KiB/s)", (long)filesize,
+				size_human_readable(filesize),
 				duration_elapsed(&bench), duration_kbps(&bench, filesize));
 	}
 
@@ -3250,8 +3253,8 @@ done:
 	if (diffs > 0)
 		retval = ERROR_FAIL;
 	if ((ERROR_OK == retval) && (duration_measure(&bench) == ERROR_OK)) {
-		command_print(CMD_CTX, "verified %" PRIu32 " bytes "
-				"in %fs (%0.3f KiB/s)", image_size,
+		command_print(CMD_CTX, "verified %" PRIu32 " bytes (%s)"
+				"in %fs (%0.3f KiB/s)", image_size, size_human_readable(image_size),
 				duration_elapsed(&bench), duration_kbps(&bench, image_size));
 	}
 
@@ -5553,8 +5556,9 @@ COMMAND_HANDLER(handle_fast_load_image_command)
 			fastload[i].length = length;
 
 			image_size += length;
-			command_print(CMD_CTX, "%u bytes written at address 0x%8.8x",
+			command_print(CMD_CTX, "%u bytes (%s) written at address 0x%8.8x",
 						  (unsigned int)length,
+						  size_human_readable(length),
 						  ((unsigned int)(image.sections[i].base_address + offset)));
 		}
 
