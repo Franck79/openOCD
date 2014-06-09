@@ -46,6 +46,7 @@
 #include <helper/time_support.h>
 #include <jtag/jtag.h>
 #include <flash/nor/core.h>
+#include <helper/show_progress.h>
 
 #include "target.h"
 #include "target_type.h"
@@ -1877,6 +1878,8 @@ static int target_write_buffer_default(struct target *target, uint32_t address, 
 {
 	uint32_t size;
 
+	init_progression_bar(count);
+
 	/* Align up to maximum 4 bytes. The loop condition makes sure the next pass
 	 * will have something to do with the size we leave to it. */
 	for (size = 1; size < 4 && count >= size * 2 + (address & size); size *= 2) {
@@ -1902,6 +1905,8 @@ static int target_write_buffer_default(struct target *target, uint32_t address, 
 			buffer += aligned;
 		}
 	}
+
+	stop_progression_bar();
 
 	return ERROR_OK;
 }
@@ -3081,6 +3086,8 @@ COMMAND_HANDLER(handle_dump_image_command)
 
 	duration_start(&bench);
 
+	init_progression_bar(size);
+
 	while (size > 0) {
 		size_t size_written;
 		uint32_t this_run_size = (size > buf_size) ? buf_size : size;
@@ -3095,6 +3102,8 @@ COMMAND_HANDLER(handle_dump_image_command)
 		size -= this_run_size;
 		address += this_run_size;
 	}
+
+	stop_progression_bar();
 
 	free(buffer);
 

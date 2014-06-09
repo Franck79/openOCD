@@ -36,6 +36,7 @@
 
 #include <target/target.h>
 #include <jtag/jtag.h>
+#include <helper/show_progress.h>
 
 /* This an option to the adv debug unit.
  * If this is defined, status bits will be skipped on burst
@@ -858,6 +859,8 @@ static int or1k_adv_jtag_read_memory(struct or1k_jtag *jtag_info,
 		if (retval != ERROR_OK)
 			return retval;
 
+		inc_progress(size * blocks_this_round);
+
 		block_count_left -= blocks_this_round;
 		block_count_address += size * MAX_BURST_SIZE;
 		block_count_buffer += size * MAX_BURST_SIZE;
@@ -941,6 +944,8 @@ static int or1k_adv_jtag_write_memory(struct or1k_jtag *jtag_info,
 				free(t);
 			return retval;
 		}
+
+		inc_progress(size * blocks_this_round);
 
 		block_count_left -= blocks_this_round;
 		block_count_address += size * MAX_BURST_SIZE;
