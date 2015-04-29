@@ -4,7 +4,7 @@
  *   Inspired from original code from Kolja Waschk's USB-JTAG project
  *   (http://www.ixo.de/info/usb_jtag/), and from openocd project.
  *
- *   Copyright (C) 2013 Franck Jullien franck.jullien@gmail.com
+ *   Copyright (C) 2013-2015 Franck Jullien franck.jullien@gmail.com
  *   Copyright (C) 2012 Robert Jarzmik robert.jarzmik@free.fr
  *   Copyright (C) 2011 Ali Lown ali@lown.me.uk
  *   Copyright (C) 2009 Catalin Patulea cat@vv.carleton.ca
@@ -83,8 +83,6 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define CLOCK_DIV	16
-
 #define repeat_for_clock_div(clock_div) \
 	for (int i = 0; i < clock_div; i++)
 
@@ -125,6 +123,8 @@ struct ublast_info {
 	uint16_t ublast_vid_uninit, ublast_pid_uninit;
 	int flags;
 	char *firmware_path;
+	int clock_div_low;
+	int clock_div_high;
 };
 
 /*
@@ -361,9 +361,9 @@ static void ublast_clock_tms(int tms)
 	info.tms = !!tms;
 	info.tdi = 0;
 	out = ublast_build_out(SCAN_OUT);
-	repeat_for_clock_div(CLOCK_DIV)
+	repeat_for_clock_div(info.clock_div_low)
 		ublast_queue_byte(out);
-	repeat_for_clock_div(CLOCK_DIV)
+	repeat_for_clock_div(info.clock_div_high)
 		ublast_queue_byte(out | TCK);
 }
 
@@ -401,14 +401,14 @@ static void ublast_clock_tdi(int tdi, enum scan_type type)
 	info.tdi = !!tdi;
 
 	out = ublast_build_out(SCAN_OUT);
-	repeat_for_clock_div(CLOCK_DIV)
+	repeat_for_clock_div(info.clock_div_low)
 		ublast_queue_byte(out);
 
 	out = ublast_build_out(type);
 	ublast_queue_byte(out | TCK);
 
 	out = ublast_build_out(SCAN_OUT);
-	repeat_for_clock_div(CLOCK_DIV)
+	repeat_for_clock_div(info.clock_div_high)
 		ublast_queue_byte(out | TCK);
 }
 
@@ -432,14 +432,14 @@ static void ublast_clock_tdi_flip_tms(int tdi, enum scan_type type)
 	info.tms = !info.tms;
 
 	out = ublast_build_out(SCAN_OUT);
-	repeat_for_clock_div(CLOCK_DIV)
+	repeat_for_clock_div(info.clock_div_low)
 		ublast_queue_byte(out);
 
 	out = ublast_build_out(type);
 	ublast_queue_byte(out | TCK);
 
 	out = ublast_build_out(SCAN_OUT);
-	repeat_for_clock_div(CLOCK_DIV)
+	repeat_for_clock_div(info.clock_div_high)
 		ublast_queue_byte(out);
 }
 
@@ -671,7 +671,8 @@ static void ublast_queue_tdi(uint8_t *bits, int nb_bits, enum scan_type scan)
 		/*
 		 * Calculate number of bytes to fill USB packet of size MAX_PACKET_SIZE
 		 */
-		nbfree_in_packet = (MAX_PACKET_SIZE - (info.bufidx%MAX_PACKET_SIZE));
+		 
+		nbfree_in_packet = (MAX_PACKET_SIZE - (info.bufidx % MAX_PACKET_SIZE));
 		trans = MIN(nbfree_in_packet - 1, nb8 - i);
 
 		/*
@@ -680,7 +681,7 @@ static void ublast_queue_tdi(uint8_t *bits, int nb_bits, enum scan_type scan)
 		 *  - current filling level of write buffer
 		 *  - remaining bytes to write in byte-shift mode
 		 */
-		if (CLOCK_DIV == 1) {
+		if (info.clock_div_low == 1 && info.clock_div_high == 1) {
 			if (read_tdos)
 				ublast_queue_byte(SHMODE | READ | trans);
 			else
@@ -695,6 +696,8 @@ static void ublast_queue_tdi(uint8_t *bits, int nb_bits, enum scan_type scan)
 				ublast_read_byteshifted_tdos(&tdos[i], trans);
 			}
 		} else {
+			
+			trans = MIN((nbfree_in_packet - 1) / (1 + info.clock_div_low + info.clock_div_high), nb8 - i) ;
 			for (j = 0; j < trans; j++) {
 				for (k = 0; k < 8; k++) {
 					int tdi = bits ? bits[j + i] & (1 << k) : 0;
@@ -929,6 +932,8 @@ static int ublast_init(void)
 
 	ret = info.drv->open(info.drv);
 
+	ublast_flush_buffer();
+
 	/*
 	 * Let lie here : the TAP is in an unknown state, but the first
 	 * execute_queue() will trigger a ublast_initial_wipeout(), which will
@@ -954,6 +959,40 @@ static int ublast_quit(void)
 
 	ublast_buf_write(&byte0, 1, &retlen);
 	return info.drv->close(info.drv);
+}
+
+static int ublast_speed(int speed)
+{
+	if (speed > info.drv->clock_frequency) {
+		LOG_ERROR("JTAG speed is limited to %dHz", info.drv->clock_frequency);
+		return ERROR_FAIL;
+	}
+
+	info.clock_div_low  = info.drv->clock_frequency / speed;
+	info.clock_div_high = info.clock_div_low;
+	int decimal = ((info.drv->clock_frequency * 10) / speed) - (info.clock_div_low * 10);
+
+	if (decimal >= 5)
+		info.clock_div_high++;
+
+	return ERROR_OK;
+}
+
+static int ublast_speed_div(int speed, int *khz)
+{
+	*khz = ((info.drv->clock_frequency * 2) / (info.clock_div_low + info.clock_div_high)) / 1000;
+	return ERROR_OK;
+}
+
+static int ublast_khz(int khz, int *jtag_speed)
+{
+	if (khz == 0) {
+		LOG_DEBUG("RCLK not supported");
+		return ERROR_FAIL;
+	}
+
+	*jtag_speed = khz * 1000;
+	return ERROR_OK;
 }
 
 COMMAND_HANDLER(ublast_handle_device_desc_command)
@@ -1127,4 +1166,8 @@ struct jtag_interface usb_blaster_interface = {
 	.execute_queue = ublast_execute_queue,
 	.init = ublast_init,
 	.quit = ublast_quit,
+
+	.speed = ublast_speed,
+	.khz = ublast_khz,
+	.speed_div = ublast_speed_div,
 };

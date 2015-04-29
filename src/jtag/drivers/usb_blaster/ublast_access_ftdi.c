@@ -126,6 +126,7 @@ static struct ublast_lowlevel low = {
 	.close = ublast_ftdi_quit,
 	.read = ublast_ftdi_read,
 	.write = ublast_ftdi_write,
+	.clock_frequency = 1200000,
 	.priv = &info,
 };
 
